@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { Project, Package, Discount, Script, Favorite, Quotation, Customer } from '@/types'
+import type { Project, Package, Discount, Script, Favorite, Quotation, Customer, ProjectQuantity } from '@/types'
 import { projects } from '@/data/projects'
 import { packages } from '@/data/packages'
 import { discounts } from '@/data/discounts'
@@ -21,6 +21,7 @@ interface AppState {
   appliedDiscounts: string[]
   toggleDiscount: (discountId: string) => void
   currentCustomer: Customer | null
+  customerId: string
   setCurrentCustomer: (customer: Customer | null) => void
   memberLevel: string
   setMemberLevel: (level: string) => void
@@ -29,9 +30,11 @@ interface AppState {
   isFavorite: (itemType: string, itemId: string) => boolean
   savedQuotations: Quotation[]
   saveQuotation: (quotation: Quotation) => void
+  updateSavedQuotation: (quotation: Quotation) => void
   deleteSavedQuotation: (quotationId: string) => void
   activeSavedQuotationId: string | null
-  loadSavedQuotation: (quotationId: string | null) => void
+  parentQuotationId: string | null
+  loadSavedQuotation: (quotationId: string | null, asNewCopy?: boolean) => void
   hesitationReason: string
   setHesitationReason: (reason: string) => void
   isOffline: boolean
@@ -86,10 +89,16 @@ export const useAppStore = create<AppState>()(
       updateQuotationItemQuantity: (projectId, quantity) =>
         set((state) => ({
           quotationItems: state.quotationItems.map((item) =>
-            item.project.id === projectId ? { ...item, quantity } : item
+            item.project.id === projectId ? { ...item, quantity: Math.max(1, quantity) } : item
           ),
         })),
-      clearQuotation: () => set({ quotationItems: [], appliedDiscounts: [] }),
+      clearQuotation: () => set({
+        quotationItems: [],
+        appliedDiscounts: [],
+        activeSavedQuotationId: null,
+        parentQuotationId: null,
+        hesitationReason: '',
+      }),
       appliedDiscounts: [],
       toggleDiscount: (discountId) =>
         set((state) => ({
@@ -98,7 +107,12 @@ export const useAppStore = create<AppState>()(
             : [...state.appliedDiscounts, discountId],
         })),
       currentCustomer: null,
-      setCurrentCustomer: (customer) => set({ currentCustomer: customer }),
+      customerId: '',
+      setCurrentCustomer: (customer) => set({
+        currentCustomer: customer,
+        customerId: customer?.id ?? '',
+        memberLevel: customer?.memberLevel ?? '',
+      }),
       memberLevel: '',
       setMemberLevel: (level) => set({ memberLevel: level }),
       favorites: [],
@@ -119,31 +133,48 @@ export const useAppStore = create<AppState>()(
         set((state) => ({
           savedQuotations: [...state.savedQuotations, quotation],
         })),
+      updateSavedQuotation: (quotation) =>
+        set((state) => ({
+          savedQuotations: state.savedQuotations.map((q) =>
+            q.id === quotation.id ? quotation : q
+          ),
+        })),
       deleteSavedQuotation: (quotationId) =>
         set((state) => ({
           savedQuotations: state.savedQuotations.filter((q) => q.id !== quotationId),
           activeSavedQuotationId: state.activeSavedQuotationId === quotationId ? null : state.activeSavedQuotationId,
+          parentQuotationId: state.parentQuotationId === quotationId ? null : state.parentQuotationId,
         })),
       activeSavedQuotationId: null,
-      loadSavedQuotation: (quotationId) => {
+      parentQuotationId: null,
+      loadSavedQuotation: (quotationId, asNewCopy = false) => {
         if (!quotationId) {
-          set({ activeSavedQuotationId: null, quotationItems: [], appliedDiscounts: [], hesitationReason: '' })
+          set({ activeSavedQuotationId: null, parentQuotationId: null, quotationItems: [], appliedDiscounts: [], hesitationReason: '' })
           return
         }
         const q = get().savedQuotations.find((s) => s.id === quotationId)
         if (!q) return
+        const qtyMap: Record<string, number> = {}
+        if (q.projectQuantities && q.projectQuantities.length > 0) {
+          for (const pq of q.projectQuantities) qtyMap[pq.projectId] = pq.quantity
+        }
         const items = q.projectIds
           .map((pid) => {
             const project = get().projects.find((p) => p.id === pid)
-            return project ? { project, quantity: 1 } : null
+            if (!project) return null
+            return { project, quantity: qtyMap[pid] ?? 1 }
           })
           .filter(Boolean) as { project: Project; quantity: number }[]
+        const customer = get().customers.find((c) => c.id === q.customerId) ?? null
         set({
-          activeSavedQuotationId: quotationId,
+          activeSavedQuotationId: asNewCopy ? null : quotationId,
+          parentQuotationId: asNewCopy ? quotationId : null,
           quotationItems: items,
           appliedDiscounts: q.discountIds,
           memberLevel: q.memberLevel,
           hesitationReason: q.hesitationReason,
+          currentCustomer: customer,
+          customerId: q.customerId,
         })
       },
       hesitationReason: '',
@@ -171,6 +202,7 @@ export const useAppStore = create<AppState>()(
         favorites: state.favorites,
         savedQuotations: state.savedQuotations,
         memberLevel: state.memberLevel,
+        customerId: state.customerId,
         projects: state.projects,
         packages: state.packages,
         discounts: state.discounts,

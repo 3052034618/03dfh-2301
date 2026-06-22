@@ -59,7 +59,7 @@ function ProjectPriceCard({ project }: { project: Project }) {
         {project.stackNote && (
           <span className="inline-flex items-start gap-1 text-[11px] text-warm-500 flex-1 min-w-0">
             <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
-            <span className="truncate">{project.stackNote}</span>
+            <span className="whitespace-pre-wrap break-words">{project.stackNote}</span>
           </span>
         )}
       </div>

@@ -58,16 +58,35 @@ export interface Discount {
   description: string
 }
 
+export interface ProjectQuantity {
+  projectId: string
+  quantity: number
+}
+
+export interface VerificationItem {
+  discountId: string
+  discountName: string
+  applicable: boolean
+  reason: string
+  needApproval: boolean
+}
+
 export interface Quotation {
   id: string
+  customerId: string
   customerName: string
   memberLevel: MemberLevel
   projectIds: string[]
+  projectQuantities: ProjectQuantity[]
   discountIds: string[]
   totalPrice: number
   hesitationReason: HesitationReason
   createdAt: string
+  updatedAt: string
   status: QuotationStatus
+  parentQuotationId: string | null
+  verificationNote: string
+  verificationItems: VerificationItem[]
 }
 
 export interface Script {
