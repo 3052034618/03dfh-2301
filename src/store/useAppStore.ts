@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { Project, Package, Discount, Script, Favorite, Quotation, Customer, ProjectQuantity } from '@/types'
+import type { Project, Package, Discount, Script, Favorite, Quotation, Customer, ProjectQuantity, FollowStatus, VersionLabel } from '@/types'
 import { projects } from '@/data/projects'
 import { packages } from '@/data/packages'
 import { discounts } from '@/data/discounts'
@@ -19,7 +19,10 @@ interface AppState {
   updateQuotationItemQuantity: (projectId: string, quantity: number) => void
   clearQuotation: () => void
   appliedDiscounts: string[]
+  confirmedDiscounts: string[]
   toggleDiscount: (discountId: string) => void
+  confirmDiscount: (discountId: string, confirmed: boolean) => void
+  clearConfirmedDiscounts: () => void
   currentCustomer: Customer | null
   customerId: string
   setCurrentCustomer: (customer: Customer | null) => void
@@ -32,9 +35,12 @@ interface AppState {
   saveQuotation: (quotation: Quotation) => void
   updateSavedQuotation: (quotation: Quotation) => void
   deleteSavedQuotation: (quotationId: string) => void
+  updateQuotationFollowStatus: (quotationId: string, status: FollowStatus, versionLabel?: VersionLabel) => void
   activeSavedQuotationId: string | null
   parentQuotationId: string | null
+  rootQuotationId: string | null
   loadSavedQuotation: (quotationId: string | null, asNewCopy?: boolean) => void
+  getNextVersionNumber: (rootId: string | null, parentId: string | null) => number
   hesitationReason: string
   setHesitationReason: (reason: string) => void
   isOffline: boolean
@@ -95,17 +101,37 @@ export const useAppStore = create<AppState>()(
       clearQuotation: () => set({
         quotationItems: [],
         appliedDiscounts: [],
+        confirmedDiscounts: [],
         activeSavedQuotationId: null,
         parentQuotationId: null,
+        rootQuotationId: null,
         hesitationReason: '',
       }),
       appliedDiscounts: [],
+      confirmedDiscounts: [],
       toggleDiscount: (discountId) =>
-        set((state) => ({
-          appliedDiscounts: state.appliedDiscounts.includes(discountId)
-            ? state.appliedDiscounts.filter((id) => id !== discountId)
-            : [...state.appliedDiscounts, discountId],
-        })),
+        set((state) => {
+          const wasApplied = state.appliedDiscounts.includes(discountId)
+          return {
+            appliedDiscounts: wasApplied
+              ? state.appliedDiscounts.filter((id) => id !== discountId)
+              : [...state.appliedDiscounts, discountId],
+            confirmedDiscounts: wasApplied
+              ? state.confirmedDiscounts.filter((id) => id !== discountId)
+              : state.confirmedDiscounts,
+          }
+        }),
+      confirmDiscount: (discountId, confirmed) =>
+        set((state) => {
+          const disc = state.discounts.find((d) => d.id === discountId)
+          if (!disc || !disc.needApproval) return {}
+          return {
+            confirmedDiscounts: confirmed
+              ? [...new Set([...state.confirmedDiscounts, discountId])]
+              : state.confirmedDiscounts.filter((id) => id !== discountId),
+          }
+        }),
+      clearConfirmedDiscounts: () => set({ confirmedDiscounts: [] }),
       currentCustomer: null,
       customerId: '',
       setCurrentCustomer: (customer) => set({
@@ -132,6 +158,8 @@ export const useAppStore = create<AppState>()(
       saveQuotation: (quotation) =>
         set((state) => ({
           savedQuotations: [...state.savedQuotations, quotation],
+          activeSavedQuotationId: quotation.id,
+          parentQuotationId: null,
         })),
       updateSavedQuotation: (quotation) =>
         set((state) => ({
@@ -144,12 +172,39 @@ export const useAppStore = create<AppState>()(
           savedQuotations: state.savedQuotations.filter((q) => q.id !== quotationId),
           activeSavedQuotationId: state.activeSavedQuotationId === quotationId ? null : state.activeSavedQuotationId,
           parentQuotationId: state.parentQuotationId === quotationId ? null : state.parentQuotationId,
+          rootQuotationId: state.rootQuotationId === quotationId ? null : state.rootQuotationId,
+        })),
+      updateQuotationFollowStatus: (quotationId, status, versionLabel) =>
+        set((state) => ({
+          savedQuotations: state.savedQuotations.map((q) =>
+            q.id === quotationId
+              ? { ...q, followStatus: status, updatedAt: new Date().toISOString(), ...(versionLabel && { versionLabel }) }
+              : q
+          ),
         })),
       activeSavedQuotationId: null,
       parentQuotationId: null,
+      rootQuotationId: null,
+      getNextVersionNumber: (rootId, parentId) => {
+        const { savedQuotations } = get()
+        if (!rootId && !parentId) return 1
+        const related = savedQuotations.filter(
+          (q) => (rootId && (q.rootQuotationId === rootId || q.id === rootId)) ||
+            (parentId && (q.parentQuotationId === parentId || q.id === parentId))
+        )
+        return related.length + 1
+      },
       loadSavedQuotation: (quotationId, asNewCopy = false) => {
         if (!quotationId) {
-          set({ activeSavedQuotationId: null, parentQuotationId: null, quotationItems: [], appliedDiscounts: [], hesitationReason: '' })
+          set({
+            activeSavedQuotationId: null,
+            parentQuotationId: null,
+            rootQuotationId: null,
+            quotationItems: [],
+            appliedDiscounts: [],
+            confirmedDiscounts: [],
+            hesitationReason: '',
+          })
           return
         }
         const q = get().savedQuotations.find((s) => s.id === quotationId)
@@ -166,16 +221,33 @@ export const useAppStore = create<AppState>()(
           })
           .filter(Boolean) as { project: Project; quantity: number }[]
         const customer = get().customers.find((c) => c.id === q.customerId) ?? null
-        set({
-          activeSavedQuotationId: asNewCopy ? null : quotationId,
-          parentQuotationId: asNewCopy ? quotationId : null,
-          quotationItems: items,
-          appliedDiscounts: q.discountIds,
-          memberLevel: q.memberLevel,
-          hesitationReason: q.hesitationReason,
-          currentCustomer: customer,
-          customerId: q.customerId,
-        })
+        if (asNewCopy) {
+          set({
+            activeSavedQuotationId: null,
+            parentQuotationId: q.id,
+            rootQuotationId: q.rootQuotationId ?? q.id,
+            quotationItems: items,
+            appliedDiscounts: q.discountIds,
+            confirmedDiscounts: q.confirmedDiscountIds ?? [],
+            memberLevel: q.memberLevel,
+            hesitationReason: q.hesitationReason,
+            currentCustomer: customer,
+            customerId: q.customerId,
+          })
+        } else {
+          set({
+            activeSavedQuotationId: q.id,
+            parentQuotationId: q.parentQuotationId,
+            rootQuotationId: q.rootQuotationId,
+            quotationItems: items,
+            appliedDiscounts: q.discountIds,
+            confirmedDiscounts: q.confirmedDiscountIds ?? [],
+            memberLevel: q.memberLevel,
+            hesitationReason: q.hesitationReason,
+            currentCustomer: customer,
+            customerId: q.customerId,
+          })
+        }
       },
       hesitationReason: '',
       setHesitationReason: (reason) => set({ hesitationReason: reason }),
@@ -207,6 +279,7 @@ export const useAppStore = create<AppState>()(
         packages: state.packages,
         discounts: state.discounts,
         lastSyncAt: state.lastSyncAt,
+        confirmedDiscounts: state.confirmedDiscounts,
       }),
     }
   )

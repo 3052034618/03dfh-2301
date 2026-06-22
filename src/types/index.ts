@@ -10,6 +10,10 @@ export type DiscountScope = 'all' | 'category' | 'project'
 
 export type QuotationStatus = '草稿' | '已发送' | '已成交' | '已作废'
 
+export type FollowStatus = '草稿' | '已发送' | '待回访' | '已成交' | '已放弃'
+
+export type VersionLabel = '原始版' | '调整版' | '最终成交版'
+
 export type HesitationReason = '价格' | '效果' | '恢复期' | '对比' | ''
 
 export type ScriptCategory = '价格异议' | '效果疑虑' | '恢复期担忧' | '品牌对比' | '纠结犹豫'
@@ -53,6 +57,7 @@ export interface Discount {
   discountValue: number
   canStack: boolean
   excludeIds: string[]
+  includeCategories: ProjectCategory[]
   needApproval: boolean
   validUntil: string
   description: string
@@ -67,6 +72,9 @@ export interface VerificationItem {
   discountId: string
   discountName: string
   applicable: boolean
+  applicableCategory: boolean
+  applicableProjects: boolean
+  confirmed: boolean
   reason: string
   needApproval: boolean
 }
@@ -79,14 +87,21 @@ export interface Quotation {
   projectIds: string[]
   projectQuantities: ProjectQuantity[]
   discountIds: string[]
+  confirmedDiscountIds: string[]
   totalPrice: number
+  finalPrice: number
   hesitationReason: HesitationReason
   createdAt: string
   updatedAt: string
   status: QuotationStatus
+  followStatus: FollowStatus
+  versionNumber: number
+  versionLabel: VersionLabel
   parentQuotationId: string | null
+  rootQuotationId: string | null
   verificationNote: string
   verificationItems: VerificationItem[]
+  remark: string
 }
 
 export interface Script {
@@ -111,4 +126,13 @@ export interface Customer {
   name: string
   memberLevel: MemberLevel
   phone: string
+}
+
+export interface QuotationDiff {
+  addedProjects: { project: Project; quantity: number }[]
+  removedProjects: { project: Project; quantity: number }[]
+  changedProjects: { project: Project; oldQty: number; newQty: number }[]
+  addedDiscounts: Discount[]
+  removedDiscounts: Discount[]
+  priceDifference: number
 }
