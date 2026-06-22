@@ -29,10 +29,15 @@ interface AppState {
   isFavorite: (itemType: string, itemId: string) => boolean
   savedQuotations: Quotation[]
   saveQuotation: (quotation: Quotation) => void
+  deleteSavedQuotation: (quotationId: string) => void
+  activeSavedQuotationId: string | null
+  loadSavedQuotation: (quotationId: string | null) => void
   hesitationReason: string
   setHesitationReason: (reason: string) => void
   isOffline: boolean
   setOffline: (offline: boolean) => void
+  lastSyncAt: string
+  setLastSyncAt: (time: string) => void
   searchQuery: string
   setSearchQuery: (query: string) => void
   selectedCategory: string
@@ -114,10 +119,39 @@ export const useAppStore = create<AppState>()(
         set((state) => ({
           savedQuotations: [...state.savedQuotations, quotation],
         })),
+      deleteSavedQuotation: (quotationId) =>
+        set((state) => ({
+          savedQuotations: state.savedQuotations.filter((q) => q.id !== quotationId),
+          activeSavedQuotationId: state.activeSavedQuotationId === quotationId ? null : state.activeSavedQuotationId,
+        })),
+      activeSavedQuotationId: null,
+      loadSavedQuotation: (quotationId) => {
+        if (!quotationId) {
+          set({ activeSavedQuotationId: null, quotationItems: [], appliedDiscounts: [], hesitationReason: '' })
+          return
+        }
+        const q = get().savedQuotations.find((s) => s.id === quotationId)
+        if (!q) return
+        const items = q.projectIds
+          .map((pid) => {
+            const project = get().projects.find((p) => p.id === pid)
+            return project ? { project, quantity: 1 } : null
+          })
+          .filter(Boolean) as { project: Project; quantity: number }[]
+        set({
+          activeSavedQuotationId: quotationId,
+          quotationItems: items,
+          appliedDiscounts: q.discountIds,
+          memberLevel: q.memberLevel,
+          hesitationReason: q.hesitationReason,
+        })
+      },
       hesitationReason: '',
       setHesitationReason: (reason) => set({ hesitationReason: reason }),
-      isOffline: false,
+      isOffline: typeof navigator !== 'undefined' ? !navigator.onLine : false,
       setOffline: (offline) => set({ isOffline: offline }),
+      lastSyncAt: new Date().toISOString(),
+      setLastSyncAt: (time) => set({ lastSyncAt: time }),
       searchQuery: '',
       setSearchQuery: (query) => set({ searchQuery: query }),
       selectedCategory: '',
@@ -137,6 +171,10 @@ export const useAppStore = create<AppState>()(
         favorites: state.favorites,
         savedQuotations: state.savedQuotations,
         memberLevel: state.memberLevel,
+        projects: state.projects,
+        packages: state.packages,
+        discounts: state.discounts,
+        lastSyncAt: state.lastSyncAt,
       }),
     }
   )

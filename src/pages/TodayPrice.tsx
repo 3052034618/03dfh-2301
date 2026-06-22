@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { Search, SlidersHorizontal, SearchX, QrCode, Heart, Plus, X } from 'lucide-react'
+import { Search, SlidersHorizontal, SearchX, QrCode, Heart, Plus, X, AlertCircle, ShieldAlert } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import type { Project, BodyPart } from '@/types'
 import { cn } from '@/lib/utils'
@@ -15,45 +15,66 @@ const DOCTORS = [
   { id: 'd006', name: '赵医生' },
 ]
 
-function PriceCard({ project, isOldCustomer }: { project: Project; isOldCustomer: boolean }) {
+function ProjectPriceCard({ project }: { project: Project }) {
   const { addQuotationItem, toggleFavorite, isFavorite } = useAppStore()
   const fav = isFavorite('project', project.id)
-  const mainPrice = isOldCustomer ? project.activityPrice : project.standardPrice
-  const subPrice = isOldCustomer ? project.standardPrice : project.activityPrice
 
   return (
     <div className="bg-white rounded-2xl p-4 shadow-card">
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-warm-900 truncate">{project.name}</h3>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h3 className="font-serif font-semibold text-warm-900">{project.name}</h3>
             <span className="shrink-0 text-xs px-2 py-0.5 rounded-full bg-rose-gold50 text-rose-gold">{project.category}</span>
           </div>
-          <p className="text-sm text-warm-500 mt-1 truncate">{project.brand} · {project.bodyPart} · {project.spec}</p>
+          <p className="text-sm text-warm-500 mt-1">{project.brand} · {project.bodyPart} · {project.spec}</p>
         </div>
         <button onClick={() => toggleFavorite('project', project.id)} className="shrink-0 p-1 ml-2">
           <Heart className={cn('w-5 h-5', fav ? 'fill-rose-gold text-rose-gold' : 'text-warm-300')} />
         </button>
       </div>
-      <div className="flex items-end justify-between mt-3">
-        <div className="flex items-baseline gap-2">
-          <span className="text-lg font-bold text-rose-gold">¥{mainPrice.toLocaleString()}</span>
-          {isOldCustomer ? (
-            <span className="text-sm text-warm-400 line-through">¥{subPrice.toLocaleString()}</span>
-          ) : (
-            <span className="text-xs text-rose-goldLight">活动价 ¥{subPrice.toLocaleString()}</span>
-          )}
+
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <div className="bg-warm-50 rounded-xl p-2.5 text-center">
+          <p className="text-[10px] text-warm-400">标准价</p>
+          <p className="text-sm font-semibold text-warm-600 mt-0.5 line-through">¥{project.standardPrice.toLocaleString()}</p>
         </div>
+        <div className="bg-rose-gold50 rounded-xl p-2.5 text-center">
+          <p className="text-[10px] text-rose-goldLight">活动价</p>
+          <p className="text-sm font-bold text-rose-gold mt-0.5">¥{project.activityPrice.toLocaleString()}</p>
+        </div>
+        <div className="bg-amber-50 rounded-xl p-2.5 text-center">
+          <p className="text-[10px] text-amber-500">最低成交</p>
+          <p className="text-sm font-bold text-amber-700 mt-0.5">¥{project.lowestPrice.toLocaleString()}</p>
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-start gap-2 flex-wrap">
+        {!project.canStack && (
+          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-red-50 text-red-500 font-medium">
+            <ShieldAlert className="w-3 h-3" />
+            不可叠加
+          </span>
+        )}
+        {project.stackNote && (
+          <span className="inline-flex items-start gap-1 text-[11px] text-warm-500 flex-1 min-w-0">
+            <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+            <span className="truncate">{project.stackNote}</span>
+          </span>
+        )}
+      </div>
+
+      <div className="mt-3 flex items-center justify-between">
+        <p className="text-xs text-warm-400">
+          {project.sessions > 1 ? `疗程 ${project.sessions} 次 · 单次 ¥${project.sessionPrice.toLocaleString()}` : '单次操作'}
+        </p>
         <button
           onClick={() => addQuotationItem(project)}
           className="flex items-center gap-1 px-3 py-1.5 bg-rose-gold text-white rounded-full text-sm font-medium active:scale-95 transition-transform"
         >
-          <Plus className="w-4 h-4" />报价
+          <Plus className="w-4 h-4" />加入报价
         </button>
       </div>
-      {project.sessions > 1 && (
-        <p className="text-xs text-warm-400 mt-2">疗程 {project.sessions} 次 · 单次 ¥{project.sessionPrice.toLocaleString()}</p>
-      )}
     </div>
   )
 }
@@ -104,7 +125,7 @@ export default function TodayPrice() {
   const {
     searchQuery, setSearchQuery, selectedCategory, setSelectedCategory,
     projects, showFilter, setShowFilter, filterBodyPart, filterDoctor, filterIsOldCustomer,
-    customers, setCurrentCustomer, setMemberLevel,
+    customers, setCurrentCustomer, setMemberLevel, memberLevel,
   } = useAppStore()
 
   const [showScan, setShowScan] = useState(false)
@@ -142,16 +163,23 @@ export default function TodayPrice() {
   return (
     <div className="max-w-md mx-auto min-h-screen bg-warm-50">
       <div className="sticky top-0 z-40 bg-warm-50 px-4 pt-3 pb-2">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-warm-400" />
-          <input
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="搜索项目、品牌、部位..."
-            className="w-full pl-10 pr-4 py-2.5 bg-white rounded-full text-sm text-warm-900 placeholder:text-warm-400 shadow-card outline-none"
-          />
+        <div className="flex items-center gap-2 mb-2">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-warm-400" />
+            <input
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="搜索项目、品牌、部位..."
+              className="w-full pl-10 pr-4 py-2.5 bg-white rounded-full text-sm text-warm-900 placeholder:text-warm-400 shadow-card outline-none"
+            />
+          </div>
+          {memberLevel && (
+            <span className="shrink-0 text-xs px-3 py-2 rounded-full bg-amber-50 text-amber-700 font-medium border border-amber-200">
+              {memberLevel}
+            </span>
+          )}
         </div>
-        <div className="flex gap-2 mt-3 overflow-x-auto pb-1">
+        <div className="flex gap-2 overflow-x-auto pb-1">
           {CATEGORIES.map(cat => (
             <button
               key={cat}
@@ -164,6 +192,12 @@ export default function TodayPrice() {
             >{cat}</button>
           ))}
         </div>
+        {filterIsOldCustomer && (
+          <div className="mt-2 flex items-center gap-1 text-xs text-amber-600 bg-amber-50 px-3 py-1.5 rounded-full w-fit border border-amber-100">
+            <AlertCircle className="w-3 h-3" />
+            当前为老客价格，活动价已显示
+          </div>
+        )}
       </div>
 
       <div className="relative px-4 pb-24">
@@ -183,7 +217,7 @@ export default function TodayPrice() {
           </div>
         ) : (
           <div className="space-y-3">
-            {filtered.map(p => <PriceCard key={p.id} project={p} isOldCustomer={filterIsOldCustomer} />)}
+            {filtered.map(p => <ProjectPriceCard key={p.id} project={p} />)}
           </div>
         )}
       </div>
