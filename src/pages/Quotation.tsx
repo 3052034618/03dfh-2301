@@ -201,9 +201,13 @@ function computeQuotationDiff(
   oldQ: Quotation | null,
   newItems: { project: Project; quantity: number }[],
   newDiscounts: Discount[],
+  newConfirmedDiscounts: Discount[],
   allProjects: Project[],
-  allDiscounts: Discount[]
-): QuotationDiff | null {
+  allDiscounts: Discount[],
+  newActivityTotal: number,
+  newConfirmedFinal: number,
+  newFinal: number
+): (QuotationDiff & { confirmedPriceDifference: number; finalPriceDifference: number }) | null {
   if (!oldQ) return null
   const oldQtyMap: Record<string, number> = {}
   if (oldQ.projectQuantities) {
@@ -234,13 +238,24 @@ function computeQuotationDiff(
   const addedDiscounts = allDiscounts.filter(d => newDiscSet.has(d.id) && !oldDiscSet.has(d.id))
   const removedDiscounts = allDiscounts.filter(d => oldDiscSet.has(d.id) && !newDiscSet.has(d.id))
 
-  const priceDifference = (() => {
-    const oldTotal = oldQ.totalPrice
-    const newTotal = newItems.reduce((s, i) => s + i.project.activityPrice * i.quantity, 0)
-    return newTotal - oldTotal
+  const oldActivityTotal = (() => {
+    let s = 0
+    for (const pid of oldQ.projectIds) {
+      const p = allProjects.find(x => x.id === pid)
+      if (!p) continue
+      const qty = oldQtyMap[pid] ?? 1
+      s += p.activityPrice * qty
+    }
+    return s
   })()
 
-  return { addedProjects, removedProjects, changedProjects, addedDiscounts, removedDiscounts, priceDifference }
+  const activityDiff = newActivityTotal - oldActivityTotal
+  const confirmedPriceDifference = newConfirmedFinal - (oldQ.totalPrice ?? oldActivityTotal)
+  const finalPriceDifference = newFinal - (oldQ.finalPrice ?? oldQ.totalPrice ?? oldActivityTotal)
+
+  const priceDifference = confirmedPriceDifference
+
+  return { addedProjects, removedProjects, changedProjects, addedDiscounts, removedDiscounts, priceDifference, confirmedPriceDifference, finalPriceDifference }
 }
 
 export default function Quotation() {
@@ -365,7 +380,10 @@ export default function Quotation() {
   const diff = useMemo(() => {
     if (!diffQuotationId) return null
     const old = savedQuotations.find(q => q.id === diffQuotationId) ?? null
-    return computeQuotationDiff(old, quotationItems, effectiveApplied, projects, discounts)
+    return computeQuotationDiff(
+      old, quotationItems, effectiveApplied, confirmedApplied,
+      projects, discounts, activityTotal, confirmedFinalTotal, finalTotal
+    )
   }, [diffQuotationId, savedQuotations, quotationItems, effectiveApplied, projects, discounts])
 
   useEffect(() => {
@@ -448,8 +466,8 @@ export default function Quotation() {
       projectQuantities,
       discountIds: effectiveApplied.map(d => d.id),
       confirmedDiscountIds: confirmedDiscounts.filter(id => effectiveApplied.some(d => d.id === id)),
-      totalPrice: Math.round(finalTotal),
-      finalPrice: Math.round(confirmedFinalTotal),
+      totalPrice: Math.round(confirmedFinalTotal),
+      finalPrice: Math.round(finalTotal),
       hesitationReason: hesitationReason as HesitationReason,
       createdAt: existing?.createdAt ?? new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -679,10 +697,13 @@ export default function Quotation() {
                     <div className="space-y-2">
                       {[...filteredCustomerHistory].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(q => {
                         const statusOpt = FOLLOW_STATUS_OPTS.find(o => o.value === (q.followStatus ?? '草稿'))
+                        const confirmedCount = (q.confirmedDiscountIds ?? []).length
+                        const appliedCount = q.discountIds.length
+                        const pendingCount = appliedCount - confirmedCount
                         return (
                           <div key={q.id} className="bg-white rounded-xl p-3">
                             <div className="flex items-center justify-between mb-1.5">
-                              <div className="flex items-center gap-1.5">
+                              <div className="flex items-center gap-1.5 flex-wrap">
                                 <span className={cn('text-[9px] px-1.5 py-0.5 rounded-full border font-medium',
                                   q.versionLabel === '原始版' ? 'bg-blue-50 text-blue-600 border-blue-200' :
                                   q.versionLabel === '最终成交版' ? 'bg-green-50 text-green-700 border-green-200' :
@@ -696,7 +717,12 @@ export default function Quotation() {
                                   </span>
                                 )}
                               </div>
-                              <span className="text-sm font-bold text-rose-gold">¥{q.totalPrice.toLocaleString()}</span>
+                              <div className="flex flex-col items-end">
+                                <span className="text-sm font-bold text-rose-gold">¥{q.totalPrice.toLocaleString()}</span>
+                                {pendingCount > 0 && (
+                                  <span className="text-[9px] text-amber-600">+¥{Math.round((q.finalPrice ?? q.totalPrice) - q.totalPrice).toLocaleString()} 待批</span>
+                                )}
+                              </div>
                             </div>
                             <div className="flex items-center gap-2 mb-1">
                               <span className="text-[10px] text-warm-400 flex items-center gap-0.5">
@@ -712,11 +738,25 @@ export default function Quotation() {
                                 </button>
                               )}
                             </div>
-                            <p className="text-[11px] text-warm-500 truncate">
+                            <p className="text-[11px] text-warm-500 truncate mb-1">
                               <ShoppingBag className="w-3 h-3 inline mr-1 -mt-0.5" />
                               {q.projectIds.length}项 · {q.projectIds.map(id => getProjectById(id)?.name).filter(Boolean).slice(0, 2).join('、')}{q.projectIds.length > 2 ? '...' : ''}
                             </p>
-                            <div className="grid grid-cols-4 gap-1 mt-2.5">
+                            {(confirmedCount > 0 || pendingCount > 0) && (
+                              <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+                                {confirmedCount > 0 && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-100">
+                                    ✓ 已确认 {confirmedCount}
+                                  </span>
+                                )}
+                                {pendingCount > 0 && (
+                                  <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                                    ⚠ 待批 {pendingCount}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                            <div className="grid grid-cols-4 gap-1 mt-1.5">
                               <button
                                 onClick={() => { loadSavedQuotation(q.id, true); onClose() }}
                                 className="py-1.5 bg-rose-gold text-white text-[10px] rounded-lg font-medium flex items-center justify-center gap-0.5"
@@ -839,26 +879,38 @@ export default function Quotation() {
               <p className="text-[11px] text-warm-600 font-medium">版本链（共{versionChain.length}个版本）</p>
             </div>
             <div className="flex gap-1.5 overflow-x-auto pb-1">
-              {versionChain.map(q => (
-                <button
-                  key={q.id}
-                  onClick={() => { loadSavedQuotation(q.id, true) }}
-                  className={cn(
-                    'shrink-0 px-2.5 py-1.5 rounded-lg text-[10px] border flex flex-col items-start',
-                    activeSavedQuotationId === q.id
-                      ? 'bg-rose-gold50 border-rose-goldLight text-rose-gold'
-                      : 'bg-warm-50 border-warm-200 text-warm-600'
-                  )}
-                >
-                  <span className="font-semibold">v{q.versionNumber} {q.versionLabel}</span>
-                  <span className="opacity-75">{formatDateShort(q.createdAt)} · ¥{q.totalPrice.toLocaleString()}</span>
-                  {(q.followStatus && q.followStatus !== '草稿') && (
-                    <span className={cn('mt-0.5 px-1 py-0 rounded text-[9px]', followStatusColor(q.followStatus ?? '草稿'))}>
-                      {q.followStatus}
-                    </span>
-                  )}
-                </button>
-              ))}
+              {versionChain.map(q => {
+                const confirmedCount = (q.confirmedDiscountIds ?? []).length
+                const pendingCount = q.discountIds.length - confirmedCount
+                return (
+                  <button
+                    key={q.id}
+                    onClick={() => { loadSavedQuotation(q.id, true) }}
+                    className={cn(
+                      'shrink-0 px-2.5 py-1.5 rounded-lg text-[10px] border flex flex-col items-start',
+                      activeSavedQuotationId === q.id
+                        ? 'bg-rose-gold50 border-rose-goldLight text-rose-gold'
+                        : 'bg-warm-50 border-warm-200 text-warm-600'
+                    )}
+                  >
+                    <div className="flex items-center gap-1">
+                      <span className="font-semibold">v{q.versionNumber} {q.versionLabel}</span>
+                      {pendingCount > 0 && (
+                        <span className="text-[9px] text-amber-600 bg-amber-50 rounded px-1">⚠{pendingCount}</span>
+                      )}
+                      {confirmedCount > 0 && pendingCount === 0 && (
+                        <span className="text-[9px] text-green-700 bg-green-50 rounded px-1">✓</span>
+                      )}
+                    </div>
+                    <span className="opacity-75">{formatDateShort(q.createdAt)} · ¥{q.totalPrice.toLocaleString()}</span>
+                    {(q.followStatus && q.followStatus !== '草稿') && (
+                      <span className={cn('mt-0.5 px-1 py-0 rounded text-[9px]', followStatusColor(q.followStatus ?? '草稿'))}>
+                        {q.followStatus}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
             </div>
           </div>
         )}
@@ -889,6 +941,7 @@ export default function Quotation() {
 
         {diff && (() => {
           const old = savedQuotations.find(q => q.id === diffQuotationId)
+          const pendingCount = approvalNotConfirmed.length
           return (
             <div className="bg-blue-50/70 rounded-2xl p-3 border border-blue-100">
               <div className="flex items-center justify-between mb-2.5">
@@ -935,15 +988,33 @@ export default function Quotation() {
                     <p className="text-red-600">取消优惠：{diff.removedDiscounts.map(d => d.name).join('、')}</p>
                   </div>
                 )}
-                <div className="flex items-center justify-between pt-1.5 border-t border-blue-100 mt-1">
-                  <span className="text-blue-600">总价差额</span>
-                  <span className={cn(
-                    'text-sm font-bold',
-                    diff.priceDifference > 0 ? 'text-red-600' :
-                    diff.priceDifference < 0 ? 'text-green-600' : 'text-warm-600'
-                  )}>
-                    {diff.priceDifference > 0 ? '+' : ''}¥{Math.round(diff.priceDifference).toLocaleString()}
-                  </span>
+                <div className="pt-1.5 border-t border-blue-100 mt-1 space-y-1">
+                  <div className="flex items-center justify-between">
+                    <span className="text-blue-600 flex items-center gap-0.5">
+                      <CircleCheck className="w-3 h-3" />已确认成交价差额
+                    </span>
+                    <span className={cn(
+                      'text-sm font-bold',
+                      diff.confirmedPriceDifference > 0 ? 'text-red-600' :
+                      diff.confirmedPriceDifference < 0 ? 'text-green-600' : 'text-warm-600'
+                    )}>
+                      {diff.confirmedPriceDifference > 0 ? '+' : ''}¥{Math.round(diff.confirmedPriceDifference).toLocaleString()}
+                    </span>
+                  </div>
+                  {pendingCount > 0 && (
+                    <div className="flex items-center justify-between text-[10px]">
+                      <span className="text-amber-600 flex items-center gap-0.5">
+                        <CircleAlert className="w-3 h-3" />含 {pendingCount} 项待批优惠（未计入）
+                      </span>
+                      <span className={cn(
+                        'font-semibold',
+                        diff.finalPriceDifference < diff.confirmedPriceDifference ? 'text-green-600' :
+                        diff.finalPriceDifference > diff.confirmedPriceDifference ? 'text-red-600' : 'text-warm-600'
+                      )}>
+                        若全部确认：{diff.finalPriceDifference > 0 ? '+' : ''}¥{Math.round(diff.finalPriceDifference).toLocaleString()}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1207,29 +1278,39 @@ export default function Quotation() {
               <span className="text-[11px]">活动价合计</span>
               <span className="text-xs">¥{Math.round(activityTotal).toLocaleString()}</span>
             </div>
-            <div className="flex justify-between items-center text-rose-gold">
-              <span className="text-[11px]">优惠减免（已选优惠）</span>
-              <span className="text-xs">-¥{Math.round(discountAmount).toLocaleString()}</span>
-            </div>
-            {approvalNotConfirmed.length > 0 && (
-              <div className="flex justify-between items-center text-amber-600 pb-1.5 border-b border-dashed border-amber-200">
-                <span className="text-[11px] flex items-center gap-0.5"><CircleAlert className="w-3 h-3" />待确认未计入</span>
-                <span className="text-xs">相差 -¥{Math.round(discountAmount - confirmedDiscountAmount).toLocaleString()}</span>
+            {confirmedDiscountAmount > 0 && (
+              <div className="flex justify-between items-center text-rose-gold">
+                <span className="text-[11px] flex items-center gap-0.5">
+                  <CircleCheck className="w-3 h-3" />已确认优惠减免
+                </span>
+                <span className="text-xs">-¥{Math.round(confirmedDiscountAmount).toLocaleString()}</span>
               </div>
             )}
-            <div className="flex justify-between items-center text-warm-500">
+            {approvalNotConfirmed.length > 0 && (
+              <div className="flex justify-between items-center text-amber-600">
+                <span className="text-[11px] flex items-center gap-0.5">
+                  <CircleAlert className="w-3 h-3" />待批优惠减免（待主管确认）
+                </span>
+                <span className="text-xs">-¥{Math.round(discountAmount - confirmedDiscountAmount).toLocaleString()}（待生效）</span>
+              </div>
+            )}
+            <div className="flex justify-between items-center text-warm-500 pt-1 border-t border-dashed border-warm-200">
               <span className="text-[11px]">成交底线（合计）</span>
               <span className="text-xs">¥{Math.round(floorTotal).toLocaleString()}</span>
             </div>
             <div className="pt-2.5 mt-1 border-t border-warm-200">
               <div className="flex justify-between items-center">
-                <span className="text-sm text-warm-700 font-medium">预估成交价</span>
-                <span className="text-xl font-bold text-rose-gold">¥{Math.round(finalTotal).toLocaleString()}</span>
+                <span className="text-sm text-warm-700 font-medium">实际成交价（已确认）</span>
+                <span className="text-xl font-bold text-rose-gold">¥{Math.round(confirmedFinalTotal).toLocaleString()}</span>
               </div>
               {approvalNotConfirmed.length > 0 && (
-                <p className="mt-1.5 text-[10px] text-amber-700 bg-amber-50 rounded-lg px-2.5 py-1.5 border border-amber-100 flex items-center gap-1">
-                  <Info className="w-3 h-3 shrink-0" />
-                  主管全部确认后最终可成交：<span className="font-semibold text-amber-800">¥{Math.round(confirmedFinalTotal).toLocaleString()}</span>
+                <p className="mt-1.5 text-[10px] text-amber-700 bg-amber-50 rounded-lg px-2.5 py-1.5 border border-amber-100 flex items-start gap-1">
+                  <Info className="w-3 h-3 shrink-0 mt-0.5" />
+                  <span>
+                    待批优惠：{approvalNotConfirmed.map(v => v.discountName).join('、')}，
+                    若主管全部确认，最终可成交 <span className="font-semibold text-amber-800">¥{Math.round(finalTotal).toLocaleString()}</span>
+                    （再减 ¥{Math.round(discountAmount - confirmedDiscountAmount).toLocaleString()}）
+                  </span>
                 </p>
               )}
             </div>
@@ -1255,13 +1336,12 @@ export default function Quotation() {
       <div ref={quotationRef} className="sr-only">
         <QuotationImage
           items={quotationItems}
-          totalPrice={Math.round(finalTotal)}
+          totalPrice={Math.round(confirmedFinalTotal)}
           customerName={currentCustomer?.name ?? ''}
           memberLevel={(currentCustomer?.memberLevel ?? memberLevel) as MemberLevel}
-          discounts={effectiveApplied}
-          verificationNote={verificationItems.length > 0
-            ? `${conclusionText}${approvalConfirmed.length > 0 ? ' · 已确认' : ''}${approvalNotConfirmed.length > 0 ? ' · 待确认' : ''}`
-            : ''}
+          confirmedDiscounts={confirmedApplied}
+          pendingDiscounts={effectiveApplied.filter(d => d.needApproval && !confirmedDiscounts.includes(d.id))}
+          verificationNote={verificationItems.length > 0 ? conclusionText : ''}
           remark={quotationRemark}
         />
       </div>
@@ -1490,6 +1570,9 @@ function HistoryPanel({
       <div className="space-y-2">
         {[...savedQuotations].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(q => {
           const statusOpt = FOLLOW_STATUS_OPTS.find(o => o.value === (q.followStatus ?? '草稿'))
+          const confirmedCount = (q.confirmedDiscountIds ?? []).length
+          const appliedCount = q.discountIds.length
+          const pendingCount = appliedCount - confirmedCount
           return (
             <div key={q.id} className="p-3 border border-warm-100 rounded-xl">
               <div className="flex items-center justify-between mb-1">
@@ -1507,17 +1590,41 @@ function HistoryPanel({
                   )}
                   {q.customerName && <span className="text-[9px] text-warm-400">{q.customerName}</span>}
                 </div>
-                <span className="text-sm font-bold text-rose-gold">¥{q.totalPrice.toLocaleString()}</span>
+                <div className="flex flex-col items-end">
+                  <span className="text-sm font-bold text-rose-gold">¥{q.totalPrice.toLocaleString()}</span>
+                  {pendingCount > 0 && (
+                    <span className="text-[9px] text-amber-600">+¥{Math.round((q.finalPrice ?? q.totalPrice) - q.totalPrice).toLocaleString()} 待批</span>
+                  )}
+                </div>
               </div>
               <p className="text-[10px] text-warm-400 mb-1 flex items-center gap-1">
                 <Calendar className="w-2.5 h-2.5" />{formatDate(q.createdAt)}
                 {q.parentQuotationId && <span className="text-warm-300">· 源自 v{(savedQuotations.find(s => s.id === q.parentQuotationId)?.versionNumber ?? '?')}</span>}
               </p>
-              <p className="text-[11px] text-warm-600 truncate mb-2">
+              <p className="text-[11px] text-warm-600 truncate mb-1">
                 {q.projectIds.length}项 · {q.projectIds.map(id => getProjectById(id)?.name).filter(Boolean).slice(0, 3).join('、')}{q.projectIds.length > 3 ? '...' : ''}
               </p>
+              {(confirmedCount > 0 || pendingCount > 0) && (
+                <div className="flex items-center gap-1 mb-1.5 flex-wrap">
+                  {confirmedCount > 0 && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-50 text-green-700 border border-green-100">
+                      ✓ 已确认优惠 {confirmedCount}
+                    </span>
+                  )}
+                  {pendingCount > 0 && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
+                      ⚠ 待批优惠 {pendingCount}
+                    </span>
+                  )}
+                </div>
+              )}
               {q.verificationNote && (
-                <p className="text-[10px] text-warm-500 bg-warm-50 rounded-lg px-2 py-1 mb-2 whitespace-pre-wrap break-words">
+                <p className={cn(
+                  'text-[10px] rounded-lg px-2 py-1 mb-2 whitespace-pre-wrap break-words',
+                  pendingCount > 0 ? 'text-amber-700 bg-amber-50 border border-amber-100' :
+                  confirmedCount > 0 ? 'text-green-700 bg-green-50 border border-green-100' :
+                  'text-warm-500 bg-warm-50'
+                )}>
                   核验：{q.verificationNote}
                 </p>
               )}
